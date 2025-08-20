@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>QRスキャン来場記録（Googleシート送信版）</title>
+  <title>QRスキャン来場記録（Googleシート送信版・登録ボタンあり）</title>
   <style>
     :root { --fg:#0f172a; --sub:#475569; --bg:#f8fafc; --brand:#2563eb; --ok:#16a34a; --warn:#eab308; --err:#dc2626; }
-    *{box-sizing:border-box} body{font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif; margin:0; background:var(--bg); color:var(--fg)}
+    *{box-sizing:border-box}
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif; margin:0; background:var(--bg); color:var(--fg)}
     header{padding:16px 20px; background:#fff; border-bottom:1px solid #e5e7eb; position:sticky; top:0; z-index:10}
     h1{font-size:20px; margin:0}
     main{max-width:1100px; margin:16px auto; padding:0 16px}
@@ -17,9 +18,9 @@
     input[type="text"], select, textarea{width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px}
     textarea{min-height:68px; resize:vertical}
     button{appearance:none; border:none; background:var(--brand); color:#fff; padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer}
-    button.secondary{background:#0ea5e9} button.ghost{background:#fff; color:var(--fg); border:1px solid #cbd5e1}
+    button.secondary{background:#0ea5e9} button.ghost{background:#fff; color:#1f2937; border:1px solid #cbd5e1}
     button.warn{background:var(--warn); color:#1f2937}
-    .stack{display:flex; gap:8px; flex-wrap:wrap}
+    .stack{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
     #videoWrap{position:relative; border-radius:12px; overflow:hidden; background:#000}
     #overlay{position:absolute; inset:0; pointer-events:none}
     video{width:100%; height:auto; display:block}
@@ -31,11 +32,14 @@
     .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
     .right{margin-left:auto}
     .hint{font-size:12px; color:var(--sub)}
+    .ok{color:#16a34a} .err{color:#dc2626}
+    .preview{display:grid; grid-template-columns:120px 1fr; gap:6px 10px; font-size:14px}
+    .preview div{padding:6px 10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px}
   </style>
 </head>
 <body>
   <header>
-    <h1>QRスキャン来場記録 <span class="pill">Googleシート送信版</span></h1>
+    <h1>QRスキャン来場記録 <span class="pill">Googleシート送信版（登録ボタン）</span></h1>
   </header>
   <main>
     <!-- 入力フォーム -->
@@ -54,9 +58,10 @@
           <input id="operator" type="text" placeholder="例：Kobori" />
         </div>
       </div>
+
       <div class="row">
         <div class="w33">
-          <label>カメラ選択</label>
+          <label>カメラ選択（権限許可後に一覧化）</label>
           <select id="cameraSelect"><option value="auto">自動選択（背面優先）</option></select>
         </div>
         <div class="w33">
@@ -73,17 +78,39 @@
           <textarea id="note" placeholder="要件/見積依頼/フォロー予定 など"></textarea>
         </div>
       </div>
+
       <div class="hint" id="secureHint"></div>
     </section>
 
-    <!-- カメラと結果表示 -->
     <section class="row">
       <div class="card w50">
         <div id="videoWrap">
           <video id="video" playsinline></video>
           <canvas id="overlay"></canvas>
         </div>
+        <div class="hint" style="margin-top:8px">
+          ① QRを読み取る → ② メモを書く → ③ <b>登録します</b> ボタンを押す（1件ずつ送信）
+        </div>
+
+        <!-- 直近読み取りプレビュー -->
+        <div class="card" style="margin-top:12px">
+          <div class="stack" style="justify-content:space-between;margin-bottom:8px">
+            <div class="muted">直近の読み取り内容（編集はメモのみ）</div>
+            <div id="status" class="muted"></div>
+          </div>
+          <div class="preview">
+            <div>名前</div>   <div id="pvName">-</div>
+            <div>会社</div>   <div id="pvCompany">-</div>
+            <div>メール</div> <div id="pvEmail">-</div>
+            <div>QR内容</div> <div id="pvRaw" class="mono" style="word-break:break-all">-</div>
+          </div>
+          <div class="stack" style="margin-top:10px">
+            <button id="registerBtn">登録します</button>
+            <button id="clearPreviewBtn" class="ghost">プレビューをクリア</button>
+          </div>
+        </div>
       </div>
+
       <div class="card w50">
         <div class="stack">
           <button id="exportBtn">CSVエクスポート</button>
@@ -107,18 +134,310 @@
         </div>
       </div>
     </section>
+
+    <p class="muted">※ HTTPS（もしくは localhost）でアクセスしないとカメラが起動しません。<br>※ 登録は <b>1件ずつ送信</b> します。送信失敗時はオフラインキューに入り、回線復旧後に自動再送します。</p>
   </main>
 
   <canvas id="hidden" style="display:none"></canvas>
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script>
-    // ======== 設定（ここを書き換える！） ========
+    // ======== 設定（必ず置き換え） ========
     const WEBHOOK_URL   = 'https://script.google.com/macros/s/AKfycbwddh8JWAAUZdIc3WG8GjnfSMW64CYt3alsFobhBM0qdLLNwgSactntZ88Yi7_oUQ-k2w/exec';
-    const WEBHOOK_TOKEN = 'EXPO-QR-2025'; // あなたの SHARED_TOKEN と一致させる
-    // =============================================
+    const WEBHOOK_TOKEN = 'EXPO-QR-2025'; // Apps ScriptのSHARED_TOKENと一致
+    // =====================================
 
-    // …以下、QR読み取り＆送信処理（省略なし）…
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const hidden = document.getElementById('hidden');
+    const ctxO = overlay.getContext('2d');
+    const ctxH = hidden.getContext('2d');
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn  = document.getElementById('stopBtn');
+    const exportBtn= document.getElementById('exportBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const torchBtn = document.getElementById('torchBtn');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const eventIdEl = document.getElementById('eventId');
+    const boothEl = document.getElementById('booth');
+    const operatorEl = document.getElementById('operator');
+    const noteEl = document.getElementById('note');
+    const beepChk = document.getElementById('beepChk');
+    const countEl = document.getElementById('count');
+    const listEl = document.getElementById('list');
+    const secureHint = document.getElementById('secureHint');
+    const statusEl = document.getElementById('status');
+    const pv = { name:document.getElementById('pvName'), company:document.getElementById('pvCompany'), email:document.getElementById('pvEmail'), raw:document.getElementById('pvRaw') };
+    const registerBtn = document.getElementById('registerBtn');
+    const clearPreviewBtn = document.getElementById('clearPreviewBtn');
+
+    let stream = null; let rafId = null; let scanning = false; let lastText = ''; let lastAt = 0; let currentTrack = null; let torchOn = false;
+
+    const STORAGE_KEY = 'qr-mvp-records-v3-sheets-manual';
+    let records = loadRecords();
+    renderList();
+
+    if (!window.isSecureContext) {
+      secureHint.textContent = '⚠️ このページはセキュアコンテキストではありません。HTTPSまたはlocalhostで開いてください。';
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    exportBtn.addEventListener('click', exportCSV);
+    clearBtn.addEventListener('click', () => { if(confirm('一覧をクリアします。よろしいですか？')) { records = []; saveRecords(); renderList(); }});
+    cameraSelect.addEventListener('change', () => { if (stream) startCamera(); });
+    torchBtn.addEventListener('click', async () => {
+      if (!currentTrack) return;
+      try { torchOn = !torchOn; await currentTrack.applyConstraints({ advanced: [{ torch: torchOn }] }); torchBtn.textContent = torchOn ? 'ライトOFF' : 'ライト'; }
+      catch(e){ console.warn('Torch unsupported', e) }
+    });
+    registerBtn.addEventListener('click', registerCurrent);
+    clearPreviewBtn.addEventListener('click', clearPreview);
+
+    let currentParsed = null; // 直近読み取りを保持（登録時に送信）
+
+    async function enumerateCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videos = devices.filter(d => d.kind === 'videoinput');
+        cameraSelect.innerHTML = '<option value="auto">自動選択（背面優先）</option>';
+        videos.forEach((d, i) => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `カメラ${i+1}`;
+          cameraSelect.appendChild(opt);
+        });
+      } catch(e){ console.warn('enumerateDevices failed', e) }
+    }
+
+    async function startCamera(){
+      try {
+        stopCamera();
+        const facingConstraints = { facingMode: { ideal: 'environment' } };
+        const selected = cameraSelect.value;
+        const constraints = { video: selected === 'auto' ? facingConstraints : { deviceId: { exact: selected } }, audio: false };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        await video.play();
+
+        const [track] = stream.getVideoTracks();
+        currentTrack = track;
+        const caps = track.getCapabilities?.();
+        torchBtn.disabled = !(caps && 'torch' in caps);
+
+        await enumerateCameras();
+        scanning = true;
+        scanLoop();
+      } catch (e) {
+        alert('カメラを開始できませんでした。権限やHTTPSをご確認ください。\n' + e);
+        console.error(e);
+      }
+    }
+
+    function stopCamera(){
+      scanning = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; currentTrack = null; torchOn = false; }
+      ctxO.clearRect(0,0,overlay.width, overlay.height);
+    }
+
+    function scanLoop(){
+      if (!scanning) return;
+      fitCanvases();
+      ctxH.drawImage(video, 0, 0, hidden.width, hidden.height);
+      const img = ctxH.getImageData(0,0,hidden.width, hidden.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      ctxO.clearRect(0,0,overlay.width, overlay.height);
+      if (code) {
+        drawBox(code.location);
+        const now = Date.now();
+        if (code.data && (code.data !== lastText || (now - lastAt) > 2000)) {
+          lastText = code.data; lastAt = now;
+          onDecode(code.data);
+        }
+      }
+      rafId = requestAnimationFrame(scanLoop);
+    }
+
+    function fitCanvases(){
+      const vw = video.videoWidth || 1280; const vh = video.videoHeight || 720;
+      overlay.width = video.clientWidth; overlay.height = video.clientHeight;
+      hidden.width = vw; hidden.height = vh;
+    }
+
+    function drawBox(loc){
+      const scaleX = overlay.width / hidden.width; const scaleY = overlay.height / hidden.height;
+      ctxO.lineWidth = 3; ctxO.strokeStyle = '#22c55e';
+      ctxO.beginPath();
+      ctxO.moveTo(loc.topLeftCorner.x*scaleX, loc.topLeftCorner.y*scaleY);
+      ctxO.lineTo(loc.topRightCorner.x*scaleX, loc.topRightCorner.y*scaleY);
+      ctxO.lineTo(loc.bottomRightCorner.x*scaleX, loc.bottomRightCorner.y*scaleY);
+      ctxO.lineTo(loc.bottomLeftCorner.x*scaleX, loc.bottomLeftCorner.y*scaleY);
+      ctxO.closePath(); ctxO.stroke();
+    }
+
+    // 読み取り時は自動送信せず、プレビューに表示
+    function onDecode(text){
+      if (beepChk.checked) beep();
+      const parsed = parseFields(text);
+      currentParsed = { ...parsed, raw: text };
+      pv.name.textContent = parsed.name || '-';
+      pv.company.textContent = parsed.company || '-';
+      pv.email.textContent = parsed.email || '-';
+      pv.raw.textContent = text;
+      statusEl.innerHTML = '<span class="ok">読み取りOK：メモを確認して「登録します」を押してください</span>';
+    }
+
+    function parseFields(text){
+      try {
+        if (/^https?:\/\//i.test(text)){
+          const u = new URL(text);
+          const qp = new URLSearchParams(u.search);
+          return { name: qp.get('name')||qp.get('n')||'', company: qp.get('company')||qp.get('c')||'', email: qp.get('email')||qp.get('e')||'' };
+        }
+      } catch {}
+      if (/^MECARD:/i.test(text)){
+        const obj = {}; text.replace(/^MECARD:/i, '').split(';').forEach(p=>{ const [k, v] = p.split(':'); if(!k) return; obj[k.toUpperCase()] = v || ''; });
+        return { name: obj.N || '', company: obj.ORG || '', email: obj.EMAIL || '' };
+      }
+      if (/BEGIN:VCARD/i.test(text)){
+        const get = (tag)=>{ const m = text.match(new RegExp('\n'+tag+':([^\\n]+)', 'i')); return m? m[1].trim():'' };
+        return { name: get('FN') || get('N'), company: get('ORG'), email: get('EMAIL') };
+      }
+      return { name:'', company:'', email:'' };
+    }
+
+    function beep(){
+      try{
+        const ac = new (window.AudioContext||window.webkitAudioContext)();
+        const o = ac.createOscillator(); const g = ac.createGain();
+        o.type='sine'; o.frequency.value=880; o.connect(g); g.connect(ac.destination);
+        g.gain.setValueAtTime(0.001, ac.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.2, ac.currentTime+0.01);
+        o.start();
+        setTimeout(()=>{ g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+0.05); o.stop(ac.currentTime+0.08); ac.close(); }, 70);
+      }catch{}
+    }
+
+    function registerCurrent(){
+      if (!currentParsed || !currentParsed.raw){
+        statusEl.innerHTML = '<span class="err">QRを読み取ってから登録してください</span>';
+        return;
+      }
+      const rec = {
+        eventId: (eventIdEl.value || '').trim(),
+        booth: (boothEl.value || '').trim(),
+        operator: (operatorEl.value || '').trim(),
+        ts: new Date().toISOString(),
+        name: currentParsed.name || '',
+        company: currentParsed.company || '',
+        email: currentParsed.email || '',
+        raw: currentParsed.raw,
+        note: (noteEl.value || '').trim()
+      };
+      // 一覧へ追加（重複はraw+eventId+noteで緩く判定）
+      if (!records.some(r => r.raw === rec.raw && r.note === rec.note && r.eventId === rec.eventId)){
+        records.unshift(rec); saveRecords(); renderList();
+      }
+      // 1件送信
+      sendToCloud({
+        event_id: rec.eventId,
+        booth: rec.booth,
+        operator: rec.operator,
+        name: rec.name,
+        company: rec.company,
+        email: rec.email,
+        raw: rec.raw,
+        note: rec.note,
+        device: navigator.userAgent
+      });
+      // 次の登録に備えてメモだけクリア
+      noteEl.value = '';
+      statusEl.innerHTML = '<span class="ok">送信キューに追加しました</span>';
+    }
+
+    function clearPreview(){
+      currentParsed = null;
+      pv.name.textContent = pv.company.textContent = pv.email.textContent = '-';
+      pv.raw.textContent = '-';
+      statusEl.textContent = '';
+    }
+
+    function renderList(){
+      listEl.innerHTML = '';
+      records.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="mono">${formatTs(r.ts)}</td>
+                        <td>${escapeHtml(r.name)}</td>
+                        <td>${escapeHtml(r.company)}</td>
+                        <td>${escapeHtml(r.email)}</td>
+                        <td class="mono" style="word-break:break-all">${escapeHtml(r.raw)}</td>
+                        <td>${escapeHtml(r.note)}</td>`;
+        listEl.appendChild(tr);
+      });
+      countEl.textContent = String(records.length);
+    }
+
+    function formatTs(iso){
+      const d = new Date(iso);
+      const pad = n=> String(n).padStart(2,'0');
+      const y=d.getFullYear(), m=pad(d.getMonth()+1), da=pad(d.getDate());
+      const h=pad(d.getHours()), mi=pad(d.getMinutes()), s=pad(d.getSeconds());
+      return `${y}/${m}/${da} ${h}:${mi}:${s}`;
+    }
+
+    function saveRecords(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); }
+    function loadRecords(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]') }catch{ return [] } }
+
+    function exportCSV(){
+      if (!records.length) { alert('エクスポートするデータがありません。'); return; }
+      const header = ['eventId','booth','operator','timestamp','name','company','email','raw','note'];
+      const rows = records.map(r => [r.eventId, r.booth, r.operator, r.ts, r.name, r.company, r.email, r.raw, r.note]);
+      const toCsv = arr => arr.map(row => row.map(cell => {
+        const s = (cell ?? '').toString().replace(/\"/g,'\"\"'); return '\"'+s+'\"';
+      }).join(',')).join('\r\n');
+      const csv = '\uFEFF' + toCsv([header, ...rows]);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      const dt = new Date();
+      const name = `qr_export_${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}.csv`;
+      a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    // 送信は 1 件ずつ。失敗時はローカルキューへ退避して自動再送
+    async function sendToCloud(payload){
+      try{
+        const res = await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json' },
+          body: JSON.stringify({ ...payload, token: WEBHOOK_TOKEN })
+        });
+        if(!res.ok) throw new Error('bad status '+res.status);
+      }catch(e){
+        const q = JSON.parse(localStorage.getItem('qr-offline-queue')||'[]');
+        q.push(payload); localStorage.setItem('qr-offline-queue', JSON.stringify(q));
+      }
+    }
+
+    setInterval(async ()=>{
+      const q = JSON.parse(localStorage.getItem('qr-offline-queue')||'[]');
+      if(!q.length) return;
+      try{
+        const payload = q[0];
+        const res = await fetch(WEBHOOK_URL, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ...payload, token: WEBHOOK_TOKEN })
+        });
+        if(res.ok){ q.shift(); localStorage.setItem('qr-offline-queue', JSON.stringify(q)); }
+      }catch{}
+    }, 5000);
+
+    function escapeHtml(s){ return (s ?? '').toString().replace(/[&<>\"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'}[c])) }
+
+    if (navigator.mediaDevices?.enumerateDevices) enumerateCameras();
   </script>
 </body>
 </html>
