@@ -41,6 +41,7 @@
   <header>
     <h1>QRスキャン来場記録 <span class="pill">Googleシート送信版（登録ボタン）</span></h1>
   </header>
+
   <main>
     <!-- 入力フォーム -->
     <section class="card w100">
@@ -142,10 +143,10 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script>
-    // ======== 設定（必ず置き換え） ========
-    const WEBHOOK_URL   = 'https://script.google.com/macros/s/AKfycbwddh8JWAAUZdIc3WG8GjnfSMW64CYt3alsFobhBM0qdLLNwgSactntZ88Yi7_oUQ-k2w/exec';
-    const WEBHOOK_TOKEN = 'EXPO-QR-2025'; // Apps ScriptのSHARED_TOKENと一致
-    // =====================================
+    // ======== 設定（必要なら差し替え） ========
+    const WEBHOOK_URL   = 'https://script.google.com/macros/s/AKfycbwPO7gMx06jnhizldE02ORMKgWkc-1X5MKvMtvNNovqbCZryIczjPALHO5wh9J9CVy4NQ/exec';
+    const WEBHOOK_TOKEN = 'GEC-EXPO-2025'; // Apps ScriptのSHARED_TOKENと一致
+    // ===========================================
 
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
@@ -421,6 +422,7 @@
       }
     }
 
+    // 5秒ごとにオフラインキューを再送
     setInterval(async ()=>{
       const q = JSON.parse(localStorage.getItem('qr-offline-queue')||'[]');
       if(!q.length) return;
